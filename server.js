@@ -65,6 +65,37 @@ const authenticate = (token) => {
   }
 };
 
+// Add this near the top with other helper functions
+const broadcastUpdates = async (userId, updateType, data) => {
+  try {
+    const userSession = connectedUsers.get(userId);
+    if (userSession && userSession.ws.readyState === WebSocket.OPEN) {
+      const message = {
+        action: 'broadcast_update',
+        type: updateType,
+        data: data,
+        timestamp: new Date().toISOString()
+      };
+      userSession.ws.send(JSON.stringify(message));
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logError('Broadcasting update', error);
+    return false;
+  }
+};
+
+const broadcastToAllRelevantUsers = async (userIds, updateType, data) => {
+  let successCount = 0;
+  for (const userId of userIds) {
+    if (await broadcastUpdates(userId, updateType, data)) {
+      successCount++;
+    }
+  }
+  return successCount;
+};
+
 // Helper: Get user by ID
 const getUserById = (userId) => {
   return connectedUsers.get(userId);
@@ -107,7 +138,7 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      console.log(`📩 Received: ${data.action}`, data);
+      console.log(`📩 Received action: ${data.action}`, data);
 
       // Actions that don't require authentication
       if (!['create_user', 'login', 'check_iin', 'verify_login'].includes(data.action)) {
@@ -129,108 +160,112 @@ wss.on('connection', (ws) => {
         ws.userId = currentUser .userId;
       }
 
+      switch (data.action) {
+        case 'create_user':
+          await handleCreateUser (ws, data);
+          break;
+        case 'login':
+          await handleLogin(ws, data);
+          break;
+        case 'verify_login':
+          await handleVerifyLogin(ws, data);
+          break;
+        case 'check_iin':
+          await handleCheckIIN(ws, data);
+          break;
+        case 'get_user_profile':
+          await handleGetUserProfile(ws, data);
+          break;
+        case 'update_user_profile':
+          await handleUpdateUserProfile(ws, data);
+          break;
+        case 'create_message':
+          await handleCreateMessage(ws, data);
+          break;
+        case 'get_messages':
+          await handleGetMessages(ws, data);
+          break;
+        case 'connection_quality':
+          await handleConnectionQuality(ws, data);
+          break;
+        case 'get_user_chats':
+          await handleGetUserChats(ws, data);
+          break;
+        case 'authenticate':
+          await handleAuthenticate(ws, data);
+          break;
+          case 'sync_confirmation':
+            await handleSyncConfirmation(ws, data);
+            break;
+        case 'create_chat':
+          await handleCreateChat(ws, data);
+          break;
+        case 'create_group':
+          await handleCreateGroup(ws, data);
+          break;
+        case 'get_group_info':
+          await handleGetGroupInfo(ws, data);
+          break;
+        case 'update_group':
+          await handleUpdateGroup(ws, data);
+          break;
+        case 'search_users':
+          await handleSearchUsers(ws, data);
+          break;
+        case 'get_statuses':
+          await handleGetStatuses(ws, data);
+          break;
+        case 'create_status':
+          await handleCreateStatus(ws, data);
+          break;
+        case 'view_status':
+          await handleViewStatus(ws, data);
+          break;
+        case 'upload_media':
+          await handleUploadMedia(ws, data);
+          break;
+        case 'update_delivery_status':
+          await handleUpdateDeliveryStatus(ws, data);
+          break;
       
+        // WebRTC Call Signaling
+        case 'initiate_call':
+          await handleInitiateCall(ws, data);
+          break;
 
-
-switch (data.action) {
-  case 'create_user':
-    await handleCreateUser(ws, data);
-    break;
-  case 'login':
-    await handleLogin(ws, data);
-    break;
-  case 'verify_login':
-    await handleVerifyLogin(ws, data);
-    break;
-  case 'check_iin':
-    await handleCheckIIN(ws, data);
-    break;
-  case 'get_user_profile':
-    await handleGetUserProfile(ws, data);
-    break;
-  case 'update_user_profile':
-    await handleUpdateUserProfile(ws, data);
-    break;
-  case 'create_message':
-    await handleCreateMessage(ws, data);
-    break;
-  case 'get_messages':
-    await handleGetMessages(ws, data);
-    break;
-  case 'connection_quality':
-    await handleConnectionQuality(ws, data);
-    break;
-  case 'get_user_chats':
-    await handleGetUserChats(ws, data);
-    break;
-    case 'authenticate':
-      await handleAuthenticate(ws, data);
-      break;
-  case 'create_chat':
-    await handleCreateChat(ws, data);
-    break;
-  case 'create_group':
-    await handleCreateGroup(ws, data);
-    break;
-  case 'get_group_info':
-    await handleGetGroupInfo(ws, data);
-    break;
-  case 'update_group':
-    await handleUpdateGroup(ws, data);
-    break;
-  case 'search_users':
-    await handleSearchUsers(ws, data);
-    break;
-  case 'get_statuses':
-    await handleGetStatuses(ws, data);
-    break;
-  case 'create_status':
-    await handleCreateStatus(ws, data);
-    break;
-  case 'view_status':
-    await handleViewStatus(ws, data);
-    break;
-  case 'upload_media':
-    await handleUploadMedia(ws, data);
-    break;
-
-    case 'update_delivery_status':
-await handleUpdateDeliveryStatus(ws, data);
-break;
-  
-  // WebRTC Call Signaling
-  case 'initiate_call':
-    await handleInitiateCall(ws, data);
-    break;
-  case 'accept_call':
-    await handleAcceptCall(ws, data);
-    break;
-  case 'reject_call':
-    await handleRejectCall(ws, data);
-    break;
-  case 'end_call':
-    await handleEndCall(ws, data);
-    break;
-  case 'webrtc_offer':
-    await handleWebRTCOffer(ws, data);
-    break;
-  case 'webrtc_answer':
-    await handleWebRTCAnswer(ws, data);
-    break;
-  case 'ice_candidate':
-    await handleICECandidate(ws, data);
-    break;
-  case 'call_status_update':
-    await handleCallStatusUpdate(ws, data);
-    break;
-
+        case 'accept_call':
+          await handleAcceptCall(ws, data);
+          break;
+        case 'reject_call':
+          await handleRejectCall(ws, data);
+          break;
+        case 'end_call':
+          await handleEndCall(ws, data);
+          break;
+        case 'webrtc_offer':
+          await handleWebRTCOffer(ws, data);
+          break;
+        case 'webrtc_answer':
+          await handleWebRTCAnswer(ws, data);
+          break;
+        case 'ice_candidate':
+          await handleICECandidate(ws, data);
+          break;
+        case 'call_status_update':
+          await handleCallStatusUpdate(ws, data);
+          break;
+      
         default:
+          // Log the unknown action and its content
+          console.error('Unknown action received:', data.action, 'Content:', data);
           ws.send(JSON.stringify({ action: data.action, error: '❌ Unknown action' }));
       }
-    } catch (error) {
-      logError('WebSocket message', error);
-      ws.send(JSON.stringify({ action: 'error', error: '🚨 Server error', details: error.message }));
-    }
+      
+      } catch (error) {
+        logError('WebSocket message', error);
+        ws.send(JSON.stringify({ action: 'error', error: '🚨 Server error', details: error.message }));
+      }
+      
   });
 
   ws.on('close', () => {
@@ -253,6 +288,12 @@ break;
       handleUserDisconnect(currentUser .userId);
     }
   });
+
+  ws.on('authenticated', async (user) => {
+    await broadcastFullSync(user.userId);
+    console.log(`Broadcasting Updates to user ${currentUser .userId}`);
+  });
+  
 });
 
 
@@ -261,7 +302,217 @@ break;
 // ===========================
 
 
+async function handleSyncConfirmation(ws, data) {
+  // Validate WebSocket connection
+  if (!ws || ws.readyState !== ws.OPEN) {
+    console.error('WebSocket is not open for communication');
+    return;
+  }
 
+  const sendResponse = (response) => {
+    try {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify(response));
+      } else {
+        console.error('Cannot send response - WebSocket not open');
+      }
+    } catch (sendError) {
+      console.error('Failed to send WebSocket response:', sendError);
+    }
+  };
+
+  try {
+    // Log the incoming data for debugging
+    console.log('Received sync confirmation data:', data);
+
+    // Validate required fields in the payload
+    const requiredFields = ['token', 'user_id', 'sync_type', 'timestamp'];
+    const missingFields = requiredFields.filter(field => !data?.[field]);
+
+    if (missingFields.length > 0) {
+      console.log('Missing required fields:', missingFields);
+      throw new Error(`Invalid payload: Missing required fields - ${missingFields.join(', ')}`);
+    }
+
+    console.log(`Processing sync confirmation for user ${data.user_id}`);
+    console.log(`Sync type: ${data.sync_type}`);
+    console.log(`Timestamp: ${data.timestamp}`);
+
+    // Initialize counters
+    const markedCount = {
+      chats: 0,
+      groups: 0,
+      messages: 0,
+      calls: 0
+    };
+
+    // Process updates in transaction to ensure atomicity
+    const client = await pool.connect();
+    
+    try {
+      await pool.query('BEGIN');
+
+      // First ensure all tables have the required columns
+      const tablesToUpdate = ['calls', 'messages', 'chats', 'groups'];
+      
+      for (const table of tablesToUpdate) {
+        // Check if sync_status column exists
+        const checkResult = await pool.query(
+          `SELECT column_name 
+           FROM information_schema.columns 
+           WHERE table_name = $1 AND column_name = 'sync_status'`,
+          [table]
+        );
+
+        if (checkResult.rowCount === 0) {
+          // Add the column if it doesn't exist
+          await pool.query(
+            `ALTER TABLE ${table} 
+             ADD COLUMN sync_status VARCHAR DEFAULT NULL,
+             ADD COLUMN updated_at TIMESTAMP DEFAULT NOW()`
+          );
+          console.log(`Added sync_status and updated_at columns to ${table} table`);
+        }
+      }
+
+      // 1. Mark calls as synced instead of deleting
+      if (data.synced_chats?.length > 0) {
+        const callsResult = await pool.query(
+          `UPDATE calls SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE chat_id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_chats]
+        );
+        markedCount.calls += callsResult.rowCount;
+        console.log(`Marked ${callsResult.rowCount} calls referencing chats as synced`);
+      }
+
+      // 2. Mark explicitly listed calls
+      if (data.synced_calls?.length > 0) {
+        const result = await pool.query(
+          `UPDATE calls SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_calls]
+        );
+        markedCount.calls += result.rowCount;
+        console.log(`Marked ${result.rowCount} explicit calls as synced`);
+      }
+
+      // 3. Mark messages that reference chats/groups to be synced
+      if (data.synced_chats?.length > 0) {
+        const messagesResult = await pool.query(
+          `UPDATE messages SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE chat_id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_chats]
+        );
+        markedCount.messages += messagesResult.rowCount;
+        console.log(`Marked ${messagesResult.rowCount} messages referencing chats as synced`);
+      }
+
+      if (data.synced_groups?.length > 0) {
+        const messagesResult = await pool.query(
+          `UPDATE messages SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE group_id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_groups]
+        );
+        markedCount.messages += messagesResult.rowCount;
+        console.log(`Marked ${messagesResult.rowCount} messages referencing groups as synced`);
+      }
+
+      // 4. Mark explicitly listed messages
+      if (data.synced_messages?.length > 0) {
+        const result = await pool.query(
+          `UPDATE messages SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_messages]
+        );
+        markedCount.messages += result.rowCount;
+        console.log(`Marked ${result.rowCount} explicit messages as synced`);
+      }
+
+      // 5. Mark chats as synced
+      if (data.synced_chats?.length > 0) {
+        const result = await pool.query(
+          `UPDATE chats SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_chats]
+        );
+        markedCount.chats = result.rowCount;
+        console.log(`Marked ${result.rowCount} chats as synced`);
+      }
+
+      // 6. Mark groups as synced
+      if (data.synced_groups?.length > 0) {
+        const result = await pool.query(
+          `UPDATE groups SET 
+             sync_status = 'synced',
+             updated_at = NOW()
+           WHERE id = ANY($1) 
+           AND (sync_status IS NULL OR sync_status != 'synced')
+           RETURNING id`,
+          [data.synced_groups]
+        );
+        markedCount.groups = result.rowCount;
+        console.log(`Marked ${result.rowCount} groups as synced`);
+      }
+
+      await pool.query('COMMIT');
+      
+      console.log('Sync confirmation processed successfully', markedCount);
+      sendResponse({
+        success: true,
+        message: 'Sync confirmation processed successfully',
+        markedCount,
+        timestamp: new Date().toISOString()
+      });
+    } catch (dbError) {
+      await pool.query('ROLLBACK');
+      console.error('Database error during sync confirmation:', dbError);
+      throw dbError;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error processing sync confirmation:', error);
+    
+    sendResponse({
+      success: false,
+      message: 'Failed to process sync confirmation',
+      errorDetails: {
+        name: error.name,
+        code: error.code,
+        constraint: error.constraint,
+        table: error.table,
+        detail: error.detail,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      },
+      timestamp: new Date().toISOString()
+    });
+  }
+}
 
 async function handleConnectionQuality(ws, data) {
   const { call_id, quality_data } = data;
@@ -752,22 +1003,179 @@ async function handleUpdateUserProfile(ws, data) {
   }
 }
 
+async function broadcastNewMessage(message) {
+  try {
+    const chatResult = await pool.query(
+      'SELECT participants FROM chats WHERE id = $1',
+      [message.chat_id]
+    );
+    
+    if (chatResult.rows.length > 0) {
+      const participants = chatResult.rows[0].participants;
+      await broadcastToAllRelevantUsers(
+        participants,
+        'new_message',
+        message
+      );
+    }
+  } catch (error) {
+    logError('Broadcasting new message', error);
+  }
+}
+
+// Broadcast chat updates (new chat, updated chat, etc.)
+async function broadcastChatUpdate(chat) {
+  try {
+    await broadcastToAllRelevantUsers(
+      chat.participants,
+      'chat_update',
+      chat
+    );
+  } catch (error) {
+    logError('Broadcasting chat update', error);
+  }
+}
+
+// Broadcast group updates
+async function broadcastGroupUpdate(group) {
+  try {
+    const chatResult = await pool.query(
+      'SELECT participants FROM chats WHERE id = $1',
+      [group.chat_id]
+    );
+    
+    if (chatResult.rows.length > 0) {
+      const participants = chatResult.rows[0].participants;
+      await broadcastToAllRelevantUsers(
+        participants,
+        'group_update',
+        group
+      );
+    }
+  } catch (error) {
+    logError('Broadcasting group update', error);
+  }
+}
+
+// Broadcast media updates
+async function broadcastMediaUpdate(mediaData, recipientIds) {
+  try {
+    await broadcastToAllRelevantUsers(
+      recipientIds,
+      'media_update',
+      mediaData
+    );
+  } catch (error) {
+    logError('Broadcasting media update', error);
+  }
+}
+
+// Broadcast call updates
+async function broadcastCallUpdate(call) {
+  try {
+    await broadcastToAllRelevantUsers(
+      call.participants,
+      'call_update',
+      call
+    );
+  } catch (error) {
+    logError('Broadcasting call update', error);
+  }
+}
+
+// Broadcast full sync data to a specific user
+async function broadcastFullSync(userId) {
+  try {
+    // Strict input validation: userId must be a non-empty string
+    if (typeof userId !== 'string' || !userId.trim()) {
+      throw new Error(`Invalid userId: expected non-empty string but got ${JSON.stringify(userId)}`);
+    }
+
+    console.log(`Starting full sync for userId: ${userId}`);
+
+    const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = await Promise.all([
+      pool.query(`
+        SELECT c.*, g.name AS group_name, g.description AS group_description
+        FROM chats c
+        LEFT JOIN groups g ON c.id = g.chat_id
+        WHERE $1::text = ANY(c.participants)
+      `, [userId]),
+
+      pool.query(`
+        SELECT m.*, md.media_url, md.base64_data
+        FROM messages m
+        LEFT JOIN media_data md ON m.id = md.message_id
+        WHERE m.chat_id IN (
+          SELECT id FROM chats WHERE $1::text = ANY(participants)
+        )
+        ORDER BY m.created_at DESC
+        LIMIT 100
+      `, [userId]),
+
+      pool.query(`
+        SELECT g.*
+        FROM groups g
+        JOIN chats c ON g.chat_id = c.id
+        WHERE $1::text = ANY(c.participants)
+      `, [userId]),
+
+      pool.query(`
+        SELECT *
+        FROM media_data
+        WHERE message_id IN (
+          SELECT id FROM messages
+          WHERE chat_id IN (
+            SELECT id FROM chats WHERE $1::text = ANY(participants)
+          )
+        )
+        ORDER BY media_data.created_at DESC
+        LIMIT 50
+      `, [userId]),
+
+      pool.query(`
+        SELECT *
+        FROM calls
+        WHERE $1::text = ANY(participants)
+          AND started_at > NOW() - INTERVAL '7 days'
+        ORDER BY started_at DESC
+        LIMIT 20
+      `, [userId])
+    ]);
+
+    const syncData = {
+      chats: chatsResult.rows,
+      messages: messagesResult.rows,
+      groups: groupsResult.rows,
+      media: mediaResult.rows,
+      calls: callsResult.rows,
+    };
+
+    await broadcastUpdates(userId, 'full_sync', syncData);
+
+    console.log(`Successfully broadcasted full sync to user ${userId}`);
+
+  } catch (error) {
+    logError('Broadcasting full sync', error);
+  }
+}
+
+
 async function handleCreateMessage(ws, data) {
-  const { chat_id, content, type, is_reply, replied_to } = data;
-  const currentUser  = authenticate(data.token);
+  const { chat_id, content, type, is_reply, replied_to, id } = data;
+  const currentUser = authenticate(data.token);
   
   try {
-    const messageId = uuidv4();
+    const messageId = id || uuidv4(); // Use provided ID or generate a new one
     
     // Get sender info
-    const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser .userId]);
+    const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
     const senderName = senderResult.rows[0]?.name || 'Unknown';
     
     const result = await pool.query(
       `INSERT INTO messages (id, chat_id, sender_id, sender_name, content, type, is_reply, replied_to, delivery_status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [messageId, chat_id, currentUser .userId, senderName, content, type, is_reply || false, replied_to, 'sent'] // Set delivery_status to 'sent'
+      [messageId, chat_id, currentUser.userId, senderName, content, type, is_reply || false, replied_to, 'sent'] // Set delivery_status to 'sent'
     );
 
     const message = result.rows[0];
@@ -779,21 +1187,8 @@ async function handleCreateMessage(ws, data) {
       [messageId, type, chat_id]
     );
     
-    // Get chat participants
-    const chatResult = await pool.query('SELECT participants FROM chats WHERE id = $1', [chat_id]);
-    const participants = chatResult.rows[0]?.participants || [];
-    
-    // Broadcast to other participants
-    const broadcastMessage = {
-      action: 'new_message',
-      message: message
-    };
-    
-    participants.forEach(participantId => {
-      if (participantId !== currentUser .userId) {
-        broadcastToUser (participantId, broadcastMessage);
-      }
-    });
+    // Broadcast to other participants using the helper function
+    await broadcastNewMessage(message);
     
     const response = {
       action: 'create_message_response',
@@ -912,19 +1307,20 @@ async function handleGetUserChats(ws, data) {
 }
 
 async function handleAuthenticate(ws, data) {
-  const currentUser  = authenticate(data.token);
+  const currentUser = authenticate(data.token);
   
-  if (!currentUser ) {
+  if (!currentUser) {
     return ws.send(JSON.stringify({ action: 'authenticate', error: '❌ Invalid token' }));
   }
 
-  // If the token is valid, you can send back a success response
+  // Emit authenticated event
+  ws.emit('authenticated', currentUser);
+
   const response = {
     action: 'authenticate_response',
     success: true,
     user: {
-      id: currentUser .userId,
-      // Include any other user details // you want to send back to the client
+      id: currentUser.userId,
     }
   };
 
@@ -973,10 +1369,15 @@ async function handleCreateChat(ws, data) {
       [chatId, false, allParticipants, participantsHash, currentUser.userId]
     );
 
+    const newChat = result.rows[0];
+    
+    // Broadcast chat update to all participants
+    await broadcastChatUpdate(newChat);
+
     const response = {
       action: 'create_chat_response',
       success: true,
-      chat: result.rows[0],
+      chat: newChat,
       exists: false
     };
 
@@ -1018,6 +1419,9 @@ async function handleCreateGroup(ws, data) {
     );
 
     const group = result.rows[0];
+    
+    // Broadcast group update to all members
+    await broadcastGroupUpdate(group);
     
     const response = {
       action: 'create_group_response',
@@ -1216,15 +1620,16 @@ async function handleInitiateCall(ws, data) {
     );
     
     // Store active call
-    activeCalls.set(callId, {
+    const callData = {
       id: callId,
       participants: participants,
       status: 'initiated',
       startedBy: currentUser.userId,
       callType: call_type,
       startedAt: new Date(),
-      callerName: callerName // Store caller name in call object
-    });
+      callerName: callerName
+    };
+    activeCalls.set(callId, callData);
     
     // Set call timeout
     const timeout = setTimeout(() => {
@@ -1232,23 +1637,8 @@ async function handleInitiateCall(ws, data) {
     }, CALL_TIMEOUT);
     callTimeouts.set(callId, timeout);
     
-    // Notify participants with caller name included
-    const callData = {
-      action: 'incoming_call',
-      call_id: callId,
-      caller_id: currentUser.userId,
-      caller_name: callerName, // Include caller's name
-      chat_id: chat_id,
-      call_type: call_type,
-      participants: participants,
-      timeout: CALL_TIMEOUT
-    };
-    
-    participants.forEach(participantId => {
-      if (participantId !== currentUser.userId) {
-        broadcastToUser(participantId, callData);
-      }
-    });
+    // Broadcast call update to all participants
+    await broadcastCallUpdate(callData);
     
     const response = {
       action: 'initiate_call_response',
@@ -1258,7 +1648,6 @@ async function handleInitiateCall(ws, data) {
     
     ws.send(JSON.stringify(response));
     logResponse('WebSocket', 'initiate_call_response', response);
-    logResponse('WebSocket', 'broadcast', callData);
   } catch (error) {
     logError('Initiating call', error);
     const response = {
@@ -1270,7 +1659,6 @@ async function handleInitiateCall(ws, data) {
   }
 }
 
-// Continuation of handleAcceptCall function
 async function handleAcceptCall(ws, data) {
   const { call_id } = data;
   const currentUser = authenticate(data.token);
@@ -1294,29 +1682,21 @@ async function handleAcceptCall(ws, data) {
       ['accepted', call_id]
     );
     
-    call.status = 'accepted';
-    call.acceptedAt = new Date();
-    activeCalls.set(call_id, call);
-    
-    // Notify other participants
-    const acceptData = {
-      action: 'call_accepted',
-      call_id: call_id,
-      accepted_by: currentUser.userId,
-      participants: call.participants
+    const updatedCallData = {
+      ...call,
+      status: 'accepted',
+      acceptedAt: new Date()
     };
+    activeCalls.set(call_id, updatedCallData);
     
-    call.participants.forEach(participantId => {
-      if (participantId !== currentUser.userId) {
-        broadcastToUser(participantId, acceptData);
-      }
-    });
+    // Broadcast call update to all participants
+    await broadcastCallUpdate(updatedCallData);
     
     const response = {
       action: 'accept_call_response',
       success: true,
       call_id: call_id,
-      call_data: call
+      call_data: updatedCallData
     };
     
     ws.send(JSON.stringify(response));
@@ -1345,22 +1725,19 @@ async function handleRejectCall(ws, data) {
     // Update call status
     await pool.query('UPDATE calls SET status = $1, ended_at = CURRENT_TIMESTAMP WHERE id = $2', ['rejected', call_id]);
     
-    // Remove from active calls
-    activeCalls.delete(call_id);
-    
-    // Notify other participants
-    const rejectData = {
-      action: 'call_rejected',
-      call_id: call_id,
-      rejected_by: currentUser.userId,
+    const updatedCallData = {
+      ...call,
+      status: 'rejected',
+      endedAt: new Date(),
+      endedBy: currentUser.userId,
       reason: reason || 'declined'
     };
     
-    call.participants.forEach(participantId => {
-      if (participantId !== currentUser.userId) {
-        broadcastToUser(participantId, rejectData);
-      }
-    });
+    // Broadcast call update before removing from active calls
+    await broadcastCallUpdate(updatedCallData);
+    
+    // Remove from active calls
+    activeCalls.delete(call_id);
     
     const response = {
       action: 'reject_call_response',
@@ -1403,22 +1780,19 @@ async function handleEndCall(ws, data) {
       ['ended', duration, call_id]
     );
     
-    // Remove from active calls
-    activeCalls.delete(call_id);
-    
-    // Notify other participants
-    const endData = {
-      action: 'call_ended',
-      call_id: call_id,
-      ended_by: currentUser.userId,
+    const updatedCallData = {
+      ...call,
+      status: 'ended',
+      endedAt: new Date(),
+      endedBy: currentUser.userId,
       duration: duration
     };
     
-    call.participants.forEach(participantId => {
-      if (participantId !== currentUser.userId) {
-        broadcastToUser(participantId, endData);
-      }
-    });
+    // Broadcast call update before removing from active calls
+    await broadcastCallUpdate(updatedCallData);
+    
+    // Remove from active calls
+    activeCalls.delete(call_id);
     
     const response = {
       action: 'end_call_response',
@@ -1833,6 +2207,16 @@ async function handleUploadMedia(ws, data) {
     fs.writeFileSync(filePath, buffer);
     
     const mediaUrl = `/uploads/${fileName}`;
+    
+    // Broadcast media update to the current user (and potentially others)
+    await broadcastMediaUpdate(
+      { 
+        media_id: mediaId, 
+        media_url: mediaUrl, 
+        media_type: media_type 
+      },
+      [currentUser.userId] // Can add more recipients if needed
+    );
     
     const response = {
       action: 'upload_media_response',
