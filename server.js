@@ -351,29 +351,6 @@ async function handleSyncConfirmation(ws, data) {
     try {
       await pool.query('BEGIN');
 
-      // First ensure all tables have the required columns
-      const tablesToUpdate = ['calls', 'messages', 'chats', 'groups'];
-      
-      for (const table of tablesToUpdate) {
-        // Check if sync_status column exists
-        const checkResult = await pool.query(
-          `SELECT column_name 
-           FROM information_schema.columns 
-           WHERE table_name = $1 AND column_name = 'sync_status'`,
-          [table]
-        );
-
-        if (checkResult.rowCount === 0) {
-          // Add the column if it doesn't exist
-          await pool.query(
-            `ALTER TABLE ${table} 
-             ADD COLUMN sync_status VARCHAR DEFAULT NULL,
-             ADD COLUMN updated_at TIMESTAMP DEFAULT NOW()`
-          );
-          console.log(`Added sync_status and updated_at columns to ${table} table`);
-        }
-      }
-
       // 1. Mark calls as synced instead of deleting
       if (data.synced_chats?.length > 0) {
         const callsResult = await pool.query(
