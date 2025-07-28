@@ -12,7 +12,7 @@ const bcrypt = require('bcrypt');
 const SALT_ROUNDS = 10;
 const crypto = require('crypto');
 
-//  Database setup
+// Database setup
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
