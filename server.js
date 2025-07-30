@@ -1069,15 +1069,15 @@ async function broadcastFullSync(userId) {
 
     console.log(`Starting full sync for userId: ${userId}`);
 
-    const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = await Promise.all([
+const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = await Promise.all([
   pool.query(`
-    SELECT c.*, g.name AS group_name, g.description AS group_description
+    SELECT TRIM(c.id) as id, c.*, g.name AS group_name, g.description AS group_description
     FROM chats c
     LEFT JOIN groups g ON TRIM(c.id) = TRIM(g.chat_id)
     WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
   `, [userId.trim()]),
   pool.query(`
-    SELECT m.*, md.media_url, md.base64_data
+    SELECT TRIM(m.id) as id, TRIM(m.chat_id) as chat_id, TRIM(m.sender_id) as sender_id, m.*, md.media_url, md.base64_data
     FROM messages m
     LEFT JOIN media_data md ON TRIM(m.id) = TRIM(md.message_id)
     WHERE TRIM(m.chat_id) IN (
@@ -1087,13 +1087,13 @@ async function broadcastFullSync(userId) {
     LIMIT 100
   `, [userId.trim()]),
   pool.query(`
-    SELECT g.*
+    SELECT TRIM(g.id) as id, TRIM(g.chat_id) as chat_id, TRIM(g.created_by) as created_by, g.*
     FROM groups g
     JOIN chats c ON TRIM(g.chat_id) = TRIM(c.id)
     WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
   `, [userId.trim()]),
   pool.query(`
-    SELECT *
+    SELECT TRIM(id) as id, TRIM(message_id) as message_id, *
     FROM media_data
     WHERE TRIM(message_id) IN (
       SELECT TRIM(id) FROM messages
@@ -1105,7 +1105,7 @@ async function broadcastFullSync(userId) {
     LIMIT 50
   `, [userId.trim()]),
   pool.query(`
-    SELECT *
+    SELECT TRIM(id) as id, *
     FROM calls
     WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
       AND started_at > NOW() - INTERVAL '7 days'
