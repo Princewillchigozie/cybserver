@@ -1070,53 +1070,49 @@ async function broadcastFullSync(userId) {
     console.log(`Starting full sync for userId: ${userId}`);
 
     const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = await Promise.all([
-      pool.query(`
-        SELECT c.*, g.name AS group_name, g.description AS group_description
-        FROM chats c
-        LEFT JOIN groups g ON c.id = g.chat_id
-        WHERE $1::text = ANY(c.participants)
-      `, [userId]),
-
-      pool.query(`
-        SELECT m.*, md.media_url, md.base64_data
-        FROM messages m
-        LEFT JOIN media_data md ON m.id = md.message_id
-        WHERE m.chat_id IN (
-          SELECT id FROM chats WHERE $1::text = ANY(participants)
-        )
-        ORDER BY m.created_at DESC
-        LIMIT 100
-      `, [userId]),
-
-      pool.query(`
-        SELECT g.*
-        FROM groups g
-        JOIN chats c ON g.chat_id = c.id
-        WHERE $1::text = ANY(c.participants)
-      `, [userId]),
-
-      pool.query(`
-        SELECT *
-        FROM media_data
-        WHERE message_id IN (
-          SELECT id FROM messages
-          WHERE chat_id IN (
-            SELECT id FROM chats WHERE $1::text = ANY(participants)
-          )
-        )
-        ORDER BY media_data.created_at DESC
-        LIMIT 50
-      `, [userId]),
-
-      pool.query(`
-        SELECT *
-        FROM calls
-        WHERE $1::text = ANY(participants)
-          AND started_at > NOW() - INTERVAL '7 days'
-        ORDER BY started_at DESC
-        LIMIT 20
-      `, [userId])
-    ]);
+  pool.query(`
+    SELECT c.*, g.name AS group_name, g.description AS group_description
+    FROM chats c
+    LEFT JOIN groups g ON TRIM(c.id) = TRIM(g.chat_id)
+    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
+  `, [userId.trim()]),
+  pool.query(`
+    SELECT m.*, md.media_url, md.base64_data
+    FROM messages m
+    LEFT JOIN media_data md ON TRIM(m.id) = TRIM(md.message_id)
+    WHERE TRIM(m.chat_id) IN (
+      SELECT TRIM(id) FROM chats WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
+    )
+    ORDER BY m.created_at DESC
+    LIMIT 100
+  `, [userId.trim()]),
+  pool.query(`
+    SELECT g.*
+    FROM groups g
+    JOIN chats c ON TRIM(g.chat_id) = TRIM(c.id)
+    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
+  `, [userId.trim()]),
+  pool.query(`
+    SELECT *
+    FROM media_data
+    WHERE TRIM(message_id) IN (
+      SELECT TRIM(id) FROM messages
+      WHERE TRIM(chat_id) IN (
+        SELECT TRIM(id) FROM chats WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
+      )
+    )
+    ORDER BY media_data.created_at DESC
+    LIMIT 50
+  `, [userId.trim()]),
+  pool.query(`
+    SELECT *
+    FROM calls
+    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
+      AND started_at > NOW() - INTERVAL '7 days'
+    ORDER BY started_at DESC
+    LIMIT 20
+  `, [userId.trim()])
+]);
 
     const syncData = {
       chats: chatsResult.rows,
