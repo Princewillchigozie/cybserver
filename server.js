@@ -1301,7 +1301,15 @@ async function handleAuthenticate(ws, data) {
 
 
 async function handleCreateChat(ws, data) {
-  const { participants } = data;
+  const { 
+    participants, 
+    last_message_content,
+    last_message_id,
+    last_message_delivery_status,
+    last_message_type,
+    participant_names,
+    sync_status = 'synced'
+  } = data;
   const currentUser = authenticate(data.token);
 
   try {
@@ -1335,10 +1343,26 @@ async function handleCreateChat(ws, data) {
     // Create a new chat
     const chatId = uuidv4();
     const result = await pool.query(
-      `INSERT INTO chats (id, is_group, participants, participants_hash, created_by)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [chatId, false, allParticipants, participantsHash, currentUser.userId]
+      `INSERT INTO chats (
+        id, is_group, participants, participants_hash, created_by,
+        last_message_content, last_message_id, last_message_delivery_status,
+        last_message_type, participant_names, sync_status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *`,
+      [
+        chatId, 
+        false, 
+        JSON.stringify(allParticipants), 
+        participantsHash, 
+        currentUser.userId,
+        last_message_content,
+        last_message_id,
+        last_message_delivery_status,
+        last_message_type,
+        participant_names,
+        sync_status
+      ]
     );
 
     const newChat = result.rows[0];
@@ -1365,7 +1389,6 @@ async function handleCreateChat(ws, data) {
     ws.send(JSON.stringify(response));
   }
 }
-
 async function handleCreateGroup(ws, data) {
   const { name, description, members } = data;
   const currentUser = authenticate(data.token);
