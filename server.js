@@ -380,7 +380,7 @@ async function handleSyncConfirmation(ws, data) {
         markedCount.calls += result.rowCount;
         console.log(`Marked ${result.rowCount} explicit calls as synced`);
       }
-
+      
       // 3. Mark messages that reference chats/groups to be synced
       if (data.synced_chats?.length > 0) {
         const messagesResult = await pool.query(
