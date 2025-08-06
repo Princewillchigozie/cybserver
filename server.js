@@ -179,8 +179,11 @@ wss.on('connection', (ws) => {
           await handleUpdateUserProfile(ws, data);
           break;
         case 'create_message':
-          await handleCreateMessage(ws, data);
-          break;
+        await handleCreateMessage(ws, data);
+        break;
+        case 'update_delivery_status':
+        await handleUpdateDeliveryStatus(ws, data);
+        break;
         case 'get_messages':
           await handleGetMessages(ws, data);
           break;
@@ -300,6 +303,150 @@ wss.on('connection', (ws) => {
 // ACTION HANDLERS
 // ===========================
 
+async function handleCreateMessage(ws, data) {
+  const { chat_id, content, type, is_reply, replied_to, id, base64_data, media_url, fileName } = data;
+  const currentUser = authenticate(data.token);
+
+  try {
+    const messageId = id || uuidv4(); // Use provided ID or generate a new one
+
+    // Get sender info
+    const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
+    const senderName = senderResult.rows[0]?.name || 'Unknown';
+
+    // Insert message into messages table
+    const result = await pool.query(
+      `INSERT INTO messages (id, chat_id, sender_id, sender_name, content, type, is_reply, replied_to, delivery_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [messageId, chat_id, currentUser.userId, senderName, content, type, is_reply || false, replied_to, 'sent']
+    );
+    const message = result.rows[0];
+
+    // If there is base64_data or media_url, insert into media_data table
+    if (base64_data || media_url) {
+      await pool.query(
+        `INSERT INTO media_data (id, message_id, base64_data, media_url, metadata, delivery_status)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          uuidv4(),
+          messageId,
+          base64_data || null,
+          media_url || null,
+          fileName ? JSON.stringify({ fileName }) : null,
+          'sent'
+        ]
+      );
+    }
+
+    // Update chat last message
+    await pool.query(
+      `UPDATE chats SET last_message_id = $1, last_message_type = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3`,
+      [messageId, type, chat_id]
+    );
+
+    // Fetch all media for this message (if any)
+    const mediaResult = await pool.query(
+      `SELECT * FROM media_data WHERE message_id = $1`,
+      [messageId]
+    );
+    const media = mediaResult.rows.length > 0 ? mediaResult.rows[0] : null;
+
+    // Prepare message with media for broadcast
+    const messageWithMedia = {
+      ...message,
+      media_data: media
+    };
+
+    // Broadcast to other participants using the helper function
+    await broadcastNewMessage(messageWithMedia);
+
+    const response = {
+      action: 'create_message_response',
+      success: true,
+      message: messageWithMedia
+    };
+
+    ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'create_message_response', response);
+  } catch (error) {
+    logError('Creating message', error);
+    const response = {
+      action: 'create_message_response',
+      success: false,
+      error: error.message
+    };
+    ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'create_message_response', response);
+  }
+}
+
+async function handleUpdateDeliveryStatus(ws, data) {
+  const { message_id, delivery_status } = data;
+  const currentUser = authenticate(data.token);
+
+  try {
+    // Update message delivery status in database
+    const result = await pool.query(
+      `UPDATE messages 
+       SET delivery_status = $1 
+       WHERE id = $2
+       RETURNING id, chat_id, sender_id, delivery_status`,
+      [delivery_status, message_id]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error('Message not found');
+    }
+
+    const updatedMessage = result.rows[0];
+
+    // Get chat participants to know who to notify
+    const chatResult = await pool.query(
+      `SELECT participants FROM chats WHERE id = $1`,
+      [updatedMessage.chat_id]
+    );
+    
+    if (chatResult.rows.length === 0) {
+      throw new Error('Chat not found');
+    }
+
+    const participants = chatResult.rows[0].participants;
+    const receiverIds = participants.filter(id => id !== updatedMessage.sender_id);
+
+    // Prepare broadcast message
+    const updateData = {
+      action: 'message_status_broadcast',
+      updates: [
+        { id: message_id, status: delivery_status }
+      ],
+      updated_at: new Date().toISOString()
+    };
+
+    // Broadcast to all participants except the sender
+    broadcastToUsers(receiverIds, updateData);
+
+    const response = {
+      action: 'update_delivery_status_response',
+      success: true,
+      message_id: message_id,
+      delivery_status: delivery_status
+    };
+
+    ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'update_delivery_status_response', response);
+  } catch (error) {
+    logError('Updating delivery status', error);
+    const response = {
+      action: 'update_delivery_status_response',
+      success: false,
+      error: error.message
+    };
+    ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'update_delivery_status_response', response);
+  }
+}
 
 async function handleSyncConfirmation(ws, data) {
   // Validate WebSocket connection
