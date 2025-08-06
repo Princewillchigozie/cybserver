@@ -1278,58 +1278,6 @@ const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = aw
   }
 }
 
-
-async function handleCreateMessage(ws, data) {
-  const { chat_id, content, type, is_reply, replied_to, id } = data;
-  const currentUser = authenticate(data.token);
-  
-  try {
-    const messageId = id || uuidv4(); // Use provided ID or generate a new one
-    
-    // Get sender info
-    const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
-    const senderName = senderResult.rows[0]?.name || 'Unknown';
-    
-    const result = await pool.query(
-      `INSERT INTO messages (id, chat_id, sender_id, sender_name, content, type, is_reply, replied_to, delivery_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [messageId, chat_id, currentUser.userId, senderName, content, type, is_reply || false, replied_to, 'sent'] // Set delivery_status to 'sent'
-    );
-
-    const message = result.rows[0];
-    
-    // Update chat last message
-    await pool.query(
-      `UPDATE chats SET last_message_id = $1, last_message_type = $2, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3`,
-      [messageId, type, chat_id]
-    );
-    
-    // Broadcast to other participants using the helper function
-    await broadcastNewMessage(message);
-    
-    const response = {
-      action: 'create_message_response',
-      success: true,
-      message: message
-    };
-    
-    ws.send(JSON.stringify(response));
-    logResponse('WebSocket', 'create_message_response', response);
-  } catch (error) {
-    logError('Creating message', error);
-    const response = {
-      action: 'create_message_response',
-      success: false,
-      error: error.message
-    };
-    ws.send(JSON.stringify(response));
-    logResponse('WebSocket', 'create_message_response', response);
-  }
-}
-
-
 async function handleGetMessages(ws, data) {
   const { chat_id, limit = 50, offset = 0 } = data;
   const currentUserId = authenticate(data.token).userId; // Get the current user's ID
