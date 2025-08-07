@@ -304,7 +304,7 @@ wss.on('connection', (ws) => {
 // ===========================
 
 async function handleCreateMessage(ws, data) {
-  const { chat_id, content, type, is_reply, replied_to, id, base64_data, media_url, fileName } = data;
+  const { chat_id, content, type, is_reply, replied_to, id, base64_data } = data;
   const currentUser = authenticate(data.token);
 
   try {
@@ -314,30 +314,37 @@ async function handleCreateMessage(ws, data) {
     const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
     const senderName = senderResult.rows[0]?.name || 'Unknown';
 
-    // Insert message into messages table
+    // Insert message into messages table including base64_data
     const result = await pool.query(
-      `INSERT INTO messages (id, chat_id, sender_id, sender_name, content, type, is_reply, replied_to, delivery_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO messages (
+        id, 
+        chat_id, 
+        sender_id, 
+        sender_name, 
+        content, 
+        type, 
+        is_reply, 
+        replied_to, 
+        delivery_status,
+        base64_data
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [messageId, chat_id, currentUser.userId, senderName, content, type, is_reply || false, replied_to, 'sent']
+      [
+        messageId, 
+        chat_id, 
+        currentUser.userId, 
+        senderName, 
+        content, 
+        type, 
+        is_reply || false, 
+        replied_to, 
+        'sent',
+        base64_data || null
+      ]
     );
+    
     const message = result.rows[0];
-
-    // If there is base64_data or media_url, insert into media_data table
-    if (base64_data || media_url) {
-      await pool.query(
-        `INSERT INTO media_data (id, message_id, base64_data, media_url, metadata, delivery_status)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          uuidv4(),
-          messageId,
-          base64_data || null,
-          media_url || null,
-          fileName ? JSON.stringify({ fileName }) : null,
-          'sent'
-        ]
-      );
-    }
 
     // Update chat last message
     await pool.query(
@@ -346,26 +353,13 @@ async function handleCreateMessage(ws, data) {
       [messageId, type, chat_id]
     );
 
-    // Fetch all media for this message (if any)
-    const mediaResult = await pool.query(
-      `SELECT * FROM media_data WHERE message_id = $1`,
-      [messageId]
-    );
-    const media = mediaResult.rows.length > 0 ? mediaResult.rows[0] : null;
-
-    // Prepare message with media for broadcast
-    const messageWithMedia = {
-      ...message,
-      media_data: media
-    };
-
-    // Broadcast to other participants using the helper function
-    await broadcastNewMessage(messageWithMedia);
+    // Broadcast to other participants
+    await broadcastNewMessage(message);
 
     const response = {
       action: 'create_message_response',
       success: true,
-      message: messageWithMedia
+      message: message
     };
 
     ws.send(JSON.stringify(response));
