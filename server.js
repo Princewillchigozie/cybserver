@@ -303,97 +303,76 @@ wss.on('connection', (ws) => {
 // ACTION HANDLERS
 // ===========================
 
-// Enhanced handleCreateMessage to properly handle non-text messages
 async function handleCreateMessage(ws, data) {
-  const { 
-    chat_id, 
-    content, 
-    type, 
-    sender_id, 
-    base64_data, 
-    media_url, 
-    metadata 
-  } = data;
+  const { chat_id, content, type, is_reply, replied_to, id, base64_data } = data;
+  const currentUser = authenticate(data.token);
 
   try {
-    const messageId = data.id || uuidv4();
-    
-    // Determine actual content based on message type
-    let actualContent = content;
-    let actualBase64Data = base64_data;
-    let actualMediaUrl = media_url;
+    const messageId = id || uuidv4(); // Use provided ID or generate a new one
 
-    // For non-text messages, prioritize base64_data or media_url
-    if (type !== 'text') {
-      actualContent = base64_data || media_url || content;
-      actualBase64Data = base64_data || null;
-      actualMediaUrl = media_url || null;
-    }
+    // Get sender info
+    const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
+    const senderName = senderResult.rows[0]?.name || 'Unknown';
 
-    // Insert with proper field mapping
+    // Insert message into messages table including base64_data
     const result = await pool.query(
       `INSERT INTO messages (
         id, 
         chat_id, 
         sender_id, 
+        sender_name, 
         content, 
         type, 
-        base64_data,
-        media_url,
-        metadata,
-        delivery_status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING *`,
+        is_reply, 
+        replied_to, 
+        delivery_status,
+        base64_data
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
       [
-        messageId,
-        chat_id,
-        sender_id,
-        actualContent,
-        type,
-        actualBase64Data,
-        actualMediaUrl,
-        JSON.stringify(metadata || {}),
-        'sent'
+        messageId, 
+        chat_id, 
+        currentUser.userId, 
+        senderName, 
+        content, 
+        type, 
+        is_reply || false, 
+        replied_to, 
+        'sent',
+        base64_data || null
       ]
     );
+    
+    const message = result.rows[0];
 
-    // Also insert into media_data table for non-text messages
-    if (type !== 'text') {
-      await pool.query(
-        `INSERT INTO media_data (
-          message_id,
-          media_url,
-          base64_data,
-          type,
-          metadata
-        ) VALUES ($1, $2, $3, $4, $5)`,
-        [
-          messageId,
-          actualMediaUrl,
-          actualBase64Data,
-          type,
-          JSON.stringify(metadata || {})
-        ]
-      );
-    }
+    // Update chat last message
+    await pool.query(
+      `UPDATE chats SET last_message_id = $1, last_message_type = $2, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3`,
+      [messageId, type, chat_id]
+    );
 
     // Broadcast to other participants
-    await broadcastNewMessage(result.rows[0]);
+    await broadcastNewMessage(message);
 
     const response = {
       action: 'create_message_response',
       success: true,
-      message: result.rows[0]
+      message: message
     };
 
     ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'create_message_response', response);
   } catch (error) {
+    logError('Creating message', error);
     const response = {
       action: 'create_message_response',
       success: false,
       error: error.message
     };
     ws.send(JSON.stringify(response));
+    logResponse('WebSocket', 'create_message_response', response);
   }
 }
 
