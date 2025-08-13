@@ -304,17 +304,60 @@ wss.on('connection', (ws) => {
 // ===========================
 
 async function handleCreateMessage(ws, data) {
-  const { chat_id, content, type, is_reply, replied_to, id, base64_data } = data;
+  const { 
+    chat_id, 
+    content, 
+    type = 'text', 
+    is_reply, 
+    replied_to, 
+    id, 
+    base64_data,
+    media_data, // Handle media_data object from client
+    sender_id   // Add sender_id support
+  } = data;
+  
   const currentUser = authenticate(data.token);
-
+  
   try {
     const messageId = id || uuidv4(); // Use provided ID or generate a new one
-
+    
     // Get sender info
     const senderResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
     const senderName = senderResult.rows[0]?.name || 'Unknown';
-
-    // Insert message into messages table including base64_data
+    
+    // Handle media data - could come from base64_data directly or from media_data object
+    let finalBase64Data = null;
+    let mediaUrl = null;
+    let fileName = null;
+    let fileSize = null;
+    let duration = null;
+    
+    if (type !== 'text') {
+      if (media_data) {
+        // Handle structured media data from client
+        finalBase64Data = media_data.base64_data;
+        fileName = media_data.file_name;
+        fileSize = media_data.file_size;
+        duration = media_data.duration;
+        mediaUrl = media_data.media_url;
+      } else if (base64_data) {
+        // Handle direct base64_data (backward compatibility)
+        finalBase64Data = base64_data;
+      }
+      
+      // Optional: Save media file to storage and get URL
+      if (finalBase64Data && !mediaUrl) {
+        try {
+          mediaUrl = await saveMediaFile(finalBase64Data, fileName, type, messageId);
+          console.log(`📁 [MEDIA] Saved ${type} file: ${mediaUrl}`);
+        } catch (error) {
+          console.warn(`⚠️ [MEDIA] Failed to save media file: ${error.message}`);
+          // Continue without media_url - client can use base64_data
+        }
+      }
+    }
+    
+    // Insert message into messages table with all media fields
     const result = await pool.query(
       `INSERT INTO messages (
         id, 
@@ -326,51 +369,91 @@ async function handleCreateMessage(ws, data) {
         is_reply, 
         replied_to, 
         delivery_status,
-        base64_data
+        base64_data,
+        media_url,
+        file_name,
+        file_size,
+        duration,
+        created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
        RETURNING *`,
       [
         messageId, 
         chat_id, 
         currentUser.userId, 
         senderName, 
-        content, 
+        content || '', // Content might be empty for media messages
         type, 
         is_reply || false, 
         replied_to, 
         'sent',
-        base64_data || null
+        finalBase64Data,
+        mediaUrl,
+        fileName,
+        fileSize,
+        duration
       ]
     );
     
     const message = result.rows[0];
-
-    // Update chat last message
+    
+    // Update chat last message with proper content preview
+    let lastMessageContent = content;
+    if (type !== 'text' && (!content || content.trim() === '')) {
+      // Generate content preview for media messages
+      switch (type) {
+        case 'image': lastMessageContent = '📷 Photo'; break;
+        case 'video': lastMessageContent = '🎥 Video'; break;
+        case 'audio': lastMessageContent = '🎵 Audio'; break;
+        case 'document': lastMessageContent = '📄 Document'; break;
+        default: lastMessageContent = `📎 ${type}`;
+      }
+    }
+    
     await pool.query(
-      `UPDATE chats SET last_message_id = $1, last_message_type = $2, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3`,
-      [messageId, type, chat_id]
+      `UPDATE chats SET 
+        last_message_id = $1, 
+        last_message_type = $2, 
+        last_message_content = $3,
+        last_message_delivery_status = 'sent',
+        updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $4`,
+      [messageId, type, lastMessageContent, chat_id]
     );
-
-    // Broadcast to other participants
-    await broadcastNewMessage(message);
-
+    
+    // Broadcast to other participants (exclude base64 from broadcast for efficiency)
+    const broadcastMessage = { ...message };
+    if (broadcastMessage.base64_data && broadcastMessage.media_url) {
+      // If we have a media URL, don't broadcast the base64 data to save bandwidth
+      delete broadcastMessage.base64_data;
+    }
+    
+    await broadcastNewMessage(broadcastMessage);
+    
+    // Send success response to sender
     const response = {
       action: 'create_message_response',
       success: true,
-      message: message
+      message: message,
+      original_id: id // Include original ID for client matching
     };
-
+    
     ws.send(JSON.stringify(response));
     logResponse('WebSocket', 'create_message_response', response);
+    
+    console.log(`✅ [MESSAGE] Created ${type} message: ${messageId} in chat: ${chat_id}`);
+    
   } catch (error) {
     logError('Creating message', error);
+    
     const response = {
       action: 'create_message_response',
       success: false,
-      error: error.message
+      error: error.message,
+      original_id: id // Include original ID even on error
     };
+    
     ws.send(JSON.stringify(response));
     logResponse('WebSocket', 'create_message_response', response);
   }
