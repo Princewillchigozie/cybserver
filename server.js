@@ -85,6 +85,26 @@ const broadcastUpdates = async (userId, updateType, data) => {
   }
 };
 
+// Check if user has synced an item
+const hasUserSynced = async (tableName, itemId, userId) => {
+  const result = await pool.query(
+    `SELECT $1 = ANY(COALESCE(synced_users, '{}')) as has_synced 
+     FROM ${tableName} WHERE id = $2`,
+    [userId, itemId]
+  );
+  return result.rows[0]?.has_synced || false;
+};
+
+// Remove user from synced_users (if needed for re-sync scenarios)
+const removeUserFromSynced = async (tableName, itemId, userId) => {
+  await pool.query(
+    `UPDATE ${tableName} 
+     SET synced_users = array_remove(synced_users, $1)
+     WHERE id = $2`,
+    [userId, itemId]
+  );
+};
+
 const broadcastToAllRelevantUsers = async (userIds, updateType, data) => {
   let successCount = 0;
   for (const userId of userIds) {
@@ -1098,6 +1118,7 @@ async function handleUpdateUserProfile(ws, data) {
   }
 }
 
+// This stays the same - always broadcast new events immediately
 async function broadcastNewMessage(message) {
   try {
     const chatResult = await pool.query(
@@ -1107,6 +1128,7 @@ async function broadcastNewMessage(message) {
     
     if (chatResult.rows.length > 0) {
       const participants = chatResult.rows[0].participants;
+      // Always broadcast to ALL participants for real-time updates
       await broadcastToAllRelevantUsers(
         participants,
         'new_message',
