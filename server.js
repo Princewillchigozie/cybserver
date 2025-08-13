@@ -526,191 +526,86 @@ async function handleUpdateDeliveryStatus(ws, data) {
 }
 
 async function handleSyncConfirmation(ws, data) {
-  // Validate WebSocket connection
-  if (!ws || ws.readyState !== ws.OPEN) {
-    console.error('WebSocket is not open for communication');
-    return;
-  }
-
-  const sendResponse = (response) => {
-    try {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(response));
-      } else {
-        console.error('Cannot send response - WebSocket not open');
-      }
-    } catch (sendError) {
-      console.error('Failed to send WebSocket response:', sendError);
-    }
-  };
-
   try {
-    // Log the incoming data for debugging
-    console.log('Received sync confirmation data:', data);
-
-    // Validate required fields in the payload
-    const requiredFields = ['token', 'user_id', 'sync_type', 'timestamp'];
-    const missingFields = requiredFields.filter(field => !data?.[field]);
-
-    if (missingFields.length > 0) {
-      console.log('Missing required fields:', missingFields);
-      throw new Error(`Invalid payload: Missing required fields - ${missingFields.join(', ')}`);
-    }
-
-    console.log(`Processing sync confirmation for user ${data.user_id}`);
-    console.log(`Sync type: ${data.sync_type}`);
-    console.log(`Timestamp: ${data.timestamp}`);
-
-    // Initialize counters
-    const markedCount = {
-      chats: 0,
-      groups: 0,
-      messages: 0,
-      calls: 0
-    };
-
-    // Process updates in transaction to ensure atomicity
+    const userId = authenticate(data.token).userId;
+    
     const client = await pool.connect();
     
     try {
       await pool.query('BEGIN');
 
-      // 1. Mark calls as synced instead of deleting
-      if (data.synced_chats?.length > 0) {
-        const callsResult = await pool.query(
-          `UPDATE calls SET 
-             sync_status = 'synced',
-             updated_at = NOW()
-           WHERE chat_id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_chats]
-        );
-        markedCount.calls += callsResult.rowCount;
-        console.log(`Marked ${callsResult.rowCount} calls referencing chats as synced`);
-      }
-
-      // 2. Mark explicitly listed calls
-      if (data.synced_calls?.length > 0) {
-        const result = await pool.query(
-          `UPDATE calls SET 
-             sync_status = 'synced',
-             updated_at = NOW()
-           WHERE id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_calls]
-        );
-        markedCount.calls += result.rowCount;
-        console.log(`Marked ${result.rowCount} explicit calls as synced`);
-      }
-      
-      // 3. Mark messages that reference chats/groups to be synced
-      if (data.synced_chats?.length > 0) {
-        const messagesResult = await pool.query(
-          `UPDATE messages SET 
-             sync_status = 'synced',
-             updated_at = NOW()
-           WHERE chat_id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_chats]
-        );
-        markedCount.messages += messagesResult.rowCount;
-        console.log(`Marked ${messagesResult.rowCount} messages referencing chats as synced`);
-      }
-
-      if (data.synced_groups?.length > 0) {
-        const messagesResult = await pool.query(
-          `UPDATE messages SET 
-             sync_status = 'synced',
-             updated_at = NOW()
-           WHERE group_id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_groups]
-        );
-        markedCount.messages += messagesResult.rowCount;
-        console.log(`Marked ${messagesResult.rowCount} messages referencing groups as synced`);
-      }
-
-      // 4. Mark explicitly listed messages
+      // Mark messages as synced for this specific user
       if (data.synced_messages?.length > 0) {
         const result = await pool.query(
           `UPDATE messages SET 
-             sync_status = 'synced',
+             synced_users = array_append(synced_users, $1),
              updated_at = NOW()
-           WHERE id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
+           WHERE id = ANY($2) 
+           AND NOT ($1 = ANY(synced_users))
            RETURNING id`,
-          [data.synced_messages]
+          [userId, data.synced_messages]
         );
-        markedCount.messages += result.rowCount;
-        console.log(`Marked ${result.rowCount} explicit messages as synced`);
+        console.log(`Marked ${result.rowCount} messages as synced for user ${userId}`);
       }
 
-      // 5. Mark chats as synced
+      // Mark chats as synced for this user
       if (data.synced_chats?.length > 0) {
-        const result = await pool.query(
+        await pool.query(
           `UPDATE chats SET 
-             sync_status = 'synced',
+             synced_users = array_append(synced_users, $1),
              updated_at = NOW()
-           WHERE id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_chats]
+           WHERE id = ANY($2) 
+           AND NOT ($1 = ANY(synced_users))`,
+          [userId, data.synced_chats]
         );
-        markedCount.chats = result.rowCount;
-        console.log(`Marked ${result.rowCount} chats as synced`);
       }
 
-      // 6. Mark groups as synced
+      // Mark groups as synced for this user
       if (data.synced_groups?.length > 0) {
-        const result = await pool.query(
+        await pool.query(
           `UPDATE groups SET 
-             sync_status = 'synced',
+             synced_users = array_append(synced_users, $1),
              updated_at = NOW()
-           WHERE id = ANY($1) 
-           AND (sync_status IS NULL OR sync_status != 'synced')
-           RETURNING id`,
-          [data.synced_groups]
+           WHERE id = ANY($2) 
+           AND NOT ($1 = ANY(synced_users))`,
+          [userId, data.synced_groups]
         );
-        markedCount.groups = result.rowCount;
-        console.log(`Marked ${result.rowCount} groups as synced`);
+      }
+
+      // Mark calls as synced for this user
+      if (data.synced_calls?.length > 0) {
+        await pool.query(
+          `UPDATE calls SET 
+             synced_users = array_append(synced_users, $1),
+             updated_at = NOW()
+           WHERE id = ANY($2) 
+           AND NOT ($1 = ANY(synced_users))`,
+          [userId, data.synced_calls]
+        );
       }
 
       await pool.query('COMMIT');
       
-      console.log('Sync confirmation processed successfully', markedCount);
-      sendResponse({
+      ws.send(JSON.stringify({
+        action: 'sync_confirmation_response',
         success: true,
         message: 'Sync confirmation processed successfully',
-        markedCount,
         timestamp: new Date().toISOString()
-      });
+      }));
+
     } catch (dbError) {
       await pool.query('ROLLBACK');
-      console.error('Database error during sync confirmation:', dbError);
       throw dbError;
     } finally {
       client.release();
     }
   } catch (error) {
     console.error('Error processing sync confirmation:', error);
-    
-    sendResponse({
+    ws.send(JSON.stringify({
+      action: 'sync_confirmation_response',
       success: false,
-      message: 'Failed to process sync confirmation',
-      errorDetails: {
-        name: error.name,
-        code: error.code,
-        constraint: error.constraint,
-        table: error.table,
-        detail: error.detail,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      },
-      timestamp: new Date().toISOString()
-    });
+      error: error.message
+    }));
   }
 }
 
@@ -1286,69 +1181,66 @@ async function broadcastCallUpdate(call) {
 // Broadcast full sync data to a specific user
 async function broadcastFullSync(userId) {
   try {
-    // Strict input validation: userId must be a non-empty string
     if (typeof userId !== 'string' || !userId.trim()) {
-      throw new Error(`Invalid userId: expected non-empty string but got ${JSON.stringify(userId)}`);
+      throw new Error(`Invalid userId: ${JSON.stringify(userId)}`);
     }
 
     console.log(`Starting full sync for userId: ${userId}`);
 
-const [chatsResult, messagesResult, groupsResult, mediaResult, callsResult] = await Promise.all([
-  pool.query(`
-    SELECT TRIM(c.id) as id, c.*, g.name AS group_name, g.description AS group_description
-    FROM chats c
-    LEFT JOIN groups g ON TRIM(c.id) = TRIM(g.chat_id)
-    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
-  `, [userId.trim()]),
-  pool.query(`
-    SELECT TRIM(m.id) as id, TRIM(m.chat_id) as chat_id, TRIM(m.sender_id) as sender_id, m.*, md.media_url, md.base64_data
-    FROM messages m
-    LEFT JOIN media_data md ON TRIM(m.id) = TRIM(md.message_id)
-    WHERE TRIM(m.chat_id) IN (
-      SELECT TRIM(id) FROM chats WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
-    )
-    ORDER BY m.created_at DESC
-    LIMIT 100
-  `, [userId.trim()]),
-  pool.query(`
-    SELECT TRIM(g.id) as id, TRIM(g.chat_id) as chat_id, TRIM(g.created_by) as created_by, g.*
-    FROM groups g
-    JOIN chats c ON TRIM(g.chat_id) = TRIM(c.id)
-    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(c.participants)))
-  `, [userId.trim()]),
-  pool.query(`
-    SELECT TRIM(id) as id, TRIM(message_id) as message_id, *
-    FROM media_data
-    WHERE TRIM(message_id) IN (
-      SELECT TRIM(id) FROM messages
-      WHERE TRIM(chat_id) IN (
-        SELECT TRIM(id) FROM chats WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
-      )
-    )
-    ORDER BY media_data.created_at DESC
-    LIMIT 50
-  `, [userId.trim()]),
-  pool.query(`
-    SELECT TRIM(id) as id, *
-    FROM calls
-    WHERE TRIM($1) = ANY(SELECT TRIM(unnest(participants)))
-      AND started_at > NOW() - INTERVAL '7 days'
-    ORDER BY started_at DESC
-    LIMIT 20
-  `, [userId.trim()])
-]);
+    const [chatsResult, messagesResult, groupsResult, callsResult] = await Promise.all([
+      // Only chats not yet synced by this user
+      pool.query(`
+        SELECT c.*, g.name AS group_name, g.description AS group_description
+        FROM chats c
+        LEFT JOIN groups g ON c.id = g.chat_id
+        WHERE $1 = ANY(c.participants)
+        AND NOT ($1 = ANY(COALESCE(c.synced_users, '{}')))
+      `, [userId]),
+
+      // Only messages not yet synced by this user
+      pool.query(`
+        SELECT m.*, md.media_url, md.base64_data
+        FROM messages m
+        LEFT JOIN media_data md ON m.id = md.message_id
+        WHERE m.chat_id IN (
+          SELECT id FROM chats WHERE $1 = ANY(participants)
+        )
+        AND NOT ($1 = ANY(COALESCE(m.synced_users, '{}')))
+        ORDER BY m.created_at DESC
+        LIMIT 100
+      `, [userId]),
+
+      // Only groups not yet synced by this user  
+      pool.query(`
+        SELECT g.*
+        FROM groups g
+        JOIN chats c ON g.chat_id = c.id
+        WHERE $1 = ANY(c.participants)
+        AND NOT ($1 = ANY(COALESCE(g.synced_users, '{}')))
+      `, [userId]),
+
+      // Only calls not yet synced by this user
+      pool.query(`
+        SELECT *
+        FROM calls
+        WHERE $1 = ANY(participants)
+        AND NOT ($1 = ANY(COALESCE(synced_users, '{}')))
+        AND started_at > NOW() - INTERVAL '7 days'
+        ORDER BY started_at DESC
+        LIMIT 20
+      `, [userId])
+    ]);
 
     const syncData = {
       chats: chatsResult.rows,
       messages: messagesResult.rows,
       groups: groupsResult.rows,
-      media: mediaResult.rows,
       calls: callsResult.rows,
     };
 
     await broadcastUpdates(userId, 'full_sync', syncData);
 
-    console.log(`Successfully broadcasted full sync to user ${userId}`);
+    console.log(`Successfully broadcasted ${messagesResult.rows.length} unsynced messages to user ${userId}`);
 
   } catch (error) {
     logError('Broadcasting full sync', error);
