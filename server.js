@@ -1426,7 +1426,7 @@ async function handleCreateChat(ws, data) {
       return;
     }
 
-    // Create a new chat
+    // Create a new chat - Fix: Use PostgreSQL array instead of JSON string
     const chatId = uuidv4();
     const result = await pool.query(
       `INSERT INTO chats (
@@ -1439,7 +1439,7 @@ async function handleCreateChat(ws, data) {
       [
         chatId, 
         false, 
-        JSON.stringify(allParticipants), 
+        allParticipants, // Pass array directly instead of JSON.stringify(allParticipants)
         participantsHash, 
         currentUser.userId,
         last_message_content,
@@ -1475,6 +1475,7 @@ async function handleCreateChat(ws, data) {
     ws.send(JSON.stringify(response));
   }
 }
+
 async function handleCreateGroup(ws, data) {
   const { name, description, members } = data;
   const currentUser = authenticate(data.token);
@@ -1484,19 +1485,27 @@ async function handleCreateGroup(ws, data) {
     const groupId = uuidv4();
     const allMembers = [currentUser.userId, ...members];
     
-    // Create chat
+    // Create chat - Fix: Use PostgreSQL array instead of JSON string
     await pool.query(
       `INSERT INTO chats (id, is_group, participants, created_by)
        VALUES ($1, $2, $3, $4)`,
-      [chatId, true, JSON.stringify(allMembers), currentUser.userId]
+      [chatId, true, allMembers, currentUser.userId] // Pass array directly
     );
     
-    // Create group
+    // Create group - Fix: Use PostgreSQL arrays instead of JSON strings
     const result = await pool.query(
       `INSERT INTO groups (id, chat_id, name, description, members, admins, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [groupId, chatId, name, description, JSON.stringify(allMembers), JSON.stringify([currentUser.userId]), currentUser.userId]
+      [
+        groupId, 
+        chatId, 
+        name, 
+        description, 
+        allMembers, // Pass array directly instead of JSON.stringify(allMembers)
+        [currentUser.userId], // Pass array directly instead of JSON.stringify([currentUser.userId])
+        currentUser.userId
+      ]
     );
 
     const group = result.rows[0];
