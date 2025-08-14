@@ -1692,40 +1692,49 @@ async function handleViewStatus(ws, data) {
 // ===========================
 
 async function handleInitiateCall(ws, data) {
-  const { chat_id, call_type, participants } = data;
+  const { chat_id, call_type, participants, offer } = data;
   const currentUser = authenticate(data.token);
   
   try {
     const callId = uuidv4();
     
+    // Validate participants array
+    if (!Array.isArray(participants) || participants.length === 0) {
+      throw new Error('Invalid participants array');
+    }
+    
+    // Ensure current user is included in participants
+    const allParticipants = [...new Set([currentUser.userId, ...participants])];
+    
     // Get caller's name from database
     const userResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
     const callerName = userResult.rows[0]?.name || 'Unknown';
     
-    // Create call record - use array directly instead of JSON.stringify
+    // Create call record
     await pool.query(
       `INSERT INTO calls (id, call_type, is_group_call, chat_id, participants, started_by, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         callId, 
         call_type, 
-        participants.length > 2, 
+        allParticipants.length > 2, 
         chat_id, 
-        participants, // Pass the array directly (PostgreSQL can handle array parameters)
+        allParticipants,
         currentUser.userId, 
         'initiated'
       ]
     );
     
-    // Store active call
+    // Store active call with all necessary data
     const callData = {
       id: callId,
-      participants: participants,
+      participants: allParticipants,
       status: 'initiated',
       startedBy: currentUser.userId,
       callType: call_type,
       startedAt: new Date(),
-      callerName: callerName
+      callerName: callerName,
+      chatId: chat_id
     };
     activeCalls.set(callId, callData);
     
@@ -1735,13 +1744,39 @@ async function handleInitiateCall(ws, data) {
     }, CALL_TIMEOUT);
     callTimeouts.set(callId, timeout);
     
-    // Broadcast call update to all participants
-    await broadcastCallUpdate(callData);
+    // Broadcast call initiation to all participants except caller
+    const callees = allParticipants.filter(id => id !== currentUser.userId);
+    
+    // Send incoming call notification to callees
+    callees.forEach(calleeId => {
+      broadcastToUser(calleeId, {
+        action: 'incoming_call',
+        call_id: callId,
+        caller: {
+          id: currentUser.userId,
+          name: callerName
+        },
+        call_type: call_type,
+        call_data: callData
+      });
+    });
+    
+    // If offer is provided, send it to the first callee (for 1-on-1 calls)
+    if (offer && callees.length === 1) {
+      broadcastToUser(callees[0], {
+        action: 'webrtc_offer',
+        call_id: callId,
+        offer: offer,
+        from_user_id: currentUser.userId,
+        call_data: callData
+      });
+    }
     
     const response = {
       action: 'initiate_call_response',
       success: true,
-      call_id: callId
+      call_id: callId,
+      call_data: callData
     };
     
     ws.send(JSON.stringify(response));
@@ -1923,9 +1958,20 @@ async function handleWebRTCOffer(ws, data) {
       throw new Error('Call not found');
     }
     
-    // Validate that both users are participants
-    if (!call.participants.includes(currentUser.userId) || !call.participants.includes(target_user_id)) {
-      throw new Error('Unauthorized participants');
+    // Validate that current user is a participant
+    if (!call.participants.includes(currentUser.userId)) {
+      throw new Error('Unauthorized participant');
+    }
+    
+    // If target_user_id is not provided, find the other participant
+    let targetUserId = target_user_id;
+    if (!targetUserId) {
+      targetUserId = call.participants.find(id => id !== currentUser.userId);
+    }
+    
+    // Validate that target user is a participant
+    if (!call.participants.includes(targetUserId)) {
+      throw new Error('Target user not found in call participants');
     }
     
     // Forward offer to target user
@@ -1936,13 +1982,13 @@ async function handleWebRTCOffer(ws, data) {
       from_user_id: currentUser.userId
     };
     
-    const success = broadcastToUser(target_user_id, offerData);
+    const success = broadcastToUser(targetUserId, offerData);
     
     const response = {
       action: 'webrtc_offer_response',
       success: success,
       call_id: call_id,
-      target_user_id: target_user_id
+      target_user_id: targetUserId
     };
     
     ws.send(JSON.stringify(response));
@@ -1960,7 +2006,7 @@ async function handleWebRTCOffer(ws, data) {
 }
 
 async function handleWebRTCAnswer(ws, data) {
-  const { call_id, answer, target_user_id } = data;
+  const { call_id, answer } = data; // Remove target_user_id as it's not always provided
   const currentUser = authenticate(data.token);
   
   try {
@@ -1969,26 +2015,36 @@ async function handleWebRTCAnswer(ws, data) {
       throw new Error('Call not found');
     }
     
-    // Validate that both users are participants
-    if (!call.participants.includes(currentUser.userId) || !call.participants.includes(target_user_id)) {
-      throw new Error('Unauthorized participants');
+    // Validate that current user is a participant
+    if (!call.participants.includes(currentUser.userId)) {
+      throw new Error('Unauthorized participant');
     }
     
-    // Forward answer to target user
-    const answerData = {
+    // The target should be the caller (who started the call)
+    const targetUserId = call.startedBy;
+    
+    // Validate that the target is also a participant
+    if (!call.participants.includes(targetUserId)) {
+      throw new Error('Caller not found in participants');
+    }
+    
+    // Don't send answer to yourself
+    if (targetUserId === currentUser.userId) {
+      throw new Error('Cannot send answer to yourself');
+    }
+    
+    // Forward answer to caller
+    const success = broadcastToUser(targetUserId, {
       action: 'webrtc_answer',
       call_id: call_id,
       answer: answer,
       from_user_id: currentUser.userId
-    };
-    
-    const success = broadcastToUser(target_user_id, answerData);
+    });
     
     const response = {
       action: 'webrtc_answer_response',
       success: success,
-      call_id: call_id,
-      target_user_id: target_user_id
+      call_id: call_id
     };
     
     ws.send(JSON.stringify(response));
@@ -2015,9 +2071,20 @@ async function handleICECandidate(ws, data) {
       throw new Error('Call not found');
     }
     
-    // Validate that both users are participants
-    if (!call.participants.includes(currentUser.userId) || !call.participants.includes(target_user_id)) {
-      throw new Error('Unauthorized participants');
+    // Validate that current user is a participant
+    if (!call.participants.includes(currentUser.userId)) {
+      throw new Error('Unauthorized participant');
+    }
+    
+    // If target_user_id is not provided, find the other participant
+    let targetUserId = target_user_id;
+    if (!targetUserId) {
+      targetUserId = call.participants.find(id => id !== currentUser.userId);
+    }
+    
+    // Validate that target user is a participant
+    if (!call.participants.includes(targetUserId)) {
+      throw new Error('Target user not found in call participants');
     }
     
     // Forward ICE candidate to target user
@@ -2028,13 +2095,13 @@ async function handleICECandidate(ws, data) {
       from_user_id: currentUser.userId
     };
     
-    const success = broadcastToUser(target_user_id, candidateData);
+    const success = broadcastToUser(targetUserId, candidateData);
     
     const response = {
       action: 'ice_candidate_response',
       success: success,
       call_id: call_id,
-      target_user_id: target_user_id
+      target_user_id: targetUserId
     };
     
     ws.send(JSON.stringify(response));
