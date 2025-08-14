@@ -1702,11 +1702,19 @@ async function handleInitiateCall(ws, data) {
     const userResult = await pool.query('SELECT name FROM users WHERE id = $1', [currentUser.userId]);
     const callerName = userResult.rows[0]?.name || 'Unknown';
     
-    // Create call record
+    // Create call record - use array directly instead of JSON.stringify
     await pool.query(
       `INSERT INTO calls (id, call_type, is_group_call, chat_id, participants, started_by, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [callId, call_type, participants.length > 2, chat_id, JSON.stringify(participants), currentUser.userId, 'initiated']
+      [
+        callId, 
+        call_type, 
+        participants.length > 2, 
+        chat_id, 
+        participants, // Pass the array directly (PostgreSQL can handle array parameters)
+        currentUser.userId, 
+        'initiated'
+      ]
     );
     
     // Store active call
