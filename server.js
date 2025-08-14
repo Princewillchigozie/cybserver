@@ -41,7 +41,7 @@ app.use('/uploads', express.static(uploadDir));
 
 // User session management
 const connectedUsers = new Map(); // userId -> { ws, user }
-const CALL_TIMEOUT = 20000; // 12 seconds
+const CALL_TIMEOUT = 30000; // 12 seconds
 const callTimeouts = new Map();
 
 // Active calls management
